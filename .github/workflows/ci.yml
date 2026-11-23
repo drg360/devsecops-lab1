@@ -10,14 +10,14 @@ jobs:
   sast-semgrep:
     name: SAST - Analisis Estatico (Semgrep)
     runs-on: ubuntu-latest
-    container:
-      image: semgrep/semgrep
     steps:
       - name: Checkout del codigo fuente
         uses: actions/checkout@v4
 
       - name: Ejecutar escaneo Semgrep (Reglas OWASP y JavaScript)
-        run: semgrep scan --config=p/javascript --config=p/secrets --error=false
+        run: |
+          docker run --rm -v "${{ github.workspace }}:/src" semgrep/semgrep \
+            semgrep scan --config=p/javascript --config=p/secrets --metrics=off
 
   container-security:
     name: SCA - Escaneo de Imagen Docker (Trivy)
