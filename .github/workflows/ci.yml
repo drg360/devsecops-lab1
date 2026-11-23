@@ -30,15 +30,32 @@ jobs:
       - name: Construir imagen Docker local en el runner
         run: docker build -t devsecops-app:${{ github.sha }} .
 
+#      - name: Escanear imagen Docker con Trivy
+#        uses: aquasecurity/trivy-action@0.28.0
+#        with:
+#          image-ref: 'devsecops-app:${{ github.sha }}'
+#          format: 'table'
+#          exit-code: '0'
+#          ignore-unfixed: true
+#          vuln-type: 'os,library'
+#          severity: 'CRITICAL,HIGH,MEDIUM'
+
       - name: Escanear imagen Docker con Trivy
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: 'devsecops-app:${{ github.sha }}'
-          format: 'table'
-          exit-code: '0'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:latest image \
+            --format table \
+            --exit-code 0 \
+            --ignore-unfixed \
+            --vuln-type os,library \
+            --severity CRITICAL,HIGH,MEDIUM \
+            devsecops-app:${{ github.sha }}
+
+
+
+
+
 
   dast-runtime-test:
     name: DAST - Pruebas Dinamicas sobre Contenedor Activo
