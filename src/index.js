@@ -4,7 +4,7 @@ const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.API_SECRET_KEY || 'NO_CONFIGURADA';
 
 app.get('/', (req, res) => {
-  res.json({ status: "OK", message: "Servidor seguro operando correctamente" });
+  res.json({ status: "OK", message: "Despliegue Automatico DevSecOps v3.0 en AWS EC2" });
 });
 
 app.get('/api/status', (req, res) => {

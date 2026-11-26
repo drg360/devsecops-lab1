@@ -1,26 +1,24 @@
-name: DevSecOps Security Pipeline
+name: DevSecOps Full CI/CD Pipeline
 
 on:
   push:
     branches: [ main ]
-  pull_request:
-    branches: [ main ]
 
 jobs:
   sast-semgrep:
-    name: SAST - Analisis Estatico (Semgrep)
+    name: 1. SAST - Quality Gate Codigo (Semgrep)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout del codigo fuente
         uses: actions/checkout@v4
 
-      - name: Ejecutar escaneo Semgrep (Reglas OWASP y JavaScript)
+      - name: Ejecutar escaneo Semgrep con bloqueo estricto
         run: |
           docker run --rm -v "${{ github.workspace }}:/src" semgrep/semgrep \
             semgrep scan --config=p/javascript --config=p/secrets --metrics=off --error
 
   container-security:
-    name: SCA - Escaneo de Imagen Docker (Trivy)
+    name: 2. SCA - Quality Gate Contenedor (Trivy)
     runs-on: ubuntu-latest
     needs: sast-semgrep
     steps:
@@ -30,35 +28,20 @@ jobs:
       - name: Construir imagen Docker local en el runner
         run: docker build -t devsecops-app:${{ github.sha }} .
 
-#      - name: Escanear imagen Docker con Trivy
-#        uses: aquasecurity/trivy-action@0.28.0
-#        with:
-#          image-ref: 'devsecops-app:${{ github.sha }}'
-#          format: 'table'
-#          exit-code: '0'
-#          ignore-unfixed: true
-#          vuln-type: 'os,library'
-#          severity: 'CRITICAL,HIGH,MEDIUM'
-
-      - name: Escanear imagen Docker con Trivy
+      - name: Auditar imagen Docker (Bloqueo ante vulnerabilidades CRITICAL)
         run: |
           docker run --rm \
             -v /var/run/docker.sock:/var/run/docker.sock \
             aquasec/trivy:latest image \
             --format table \
-            --exit-code 0 \
+            --exit-code 1 \
             --ignore-unfixed \
             --vuln-type os,library \
-            --severity CRITICAL,HIGH,MEDIUM \
+            --severity CRITICAL \
             devsecops-app:${{ github.sha }}
 
-
-
-
-
-
   dast-runtime-test:
-    name: DAST - Pruebas Dinamicas sobre Contenedor Activo
+    name: 3. DAST - Pruebas Dinamicas en Vivo
     runs-on: ubuntu-latest
     needs: container-security
     steps:
@@ -68,23 +51,50 @@ jobs:
       - name: Construir imagen para pruebas dinamicas
         run: docker build -t devsecops-dast:test .
 
-      - name: Levantar contenedor inyectando GitHub Secret
+      - name: Levantar contenedor y validar endpoints con secreto
         run: |
           docker run -d --name dast-target -p 3000:3000 \
             -e API_SECRET_KEY="${{ secrets.API_SECRET_KEY }}" \
             devsecops-dast:test
           sleep 3
-
-      - name: Validar carga segura de secretos y cabeceras HTTP
-        run: |
-          echo "--- Probando Endpoint Principal ---"
-          curl -i -s http://localhost:3000/
-          echo ""
-          echo "--- Probando Endpoint de Estado con Secreto ---"
           RESPONSE=$(curl -s http://localhost:3000/api/status)
-          echo "Respuesta API: $RESPONSE"
+          echo "Respuesta DAST: $RESPONSE"
           echo "$RESPONSE" | grep '"secretLoaded":true'
 
-      - name: Limpiar contenedor de prueba
+      - name: Limpiar contenedor temporal
         if: always()
         run: docker stop dast-target && docker rm dast-target
+
+  deploy-to-aws:
+    name: 4. CD - Despliegue en Servidor Produccion (EC2)
+    runs-on: ubuntu-latest
+    needs: dast-runtime-test
+    steps:
+      - name: Checkout del codigo fuente
+        uses: actions/checkout@v4
+
+      - name: Construir y empaquetar imagen aprobada
+        run: |
+          docker build -t devsecops-prod:latest .
+          docker save devsecops-prod:latest | gzip > app-prod.tar.gz
+
+      - name: Configurar llave privada SSH de Produccion
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_PROD_SSH_KEY }}" > ~/.ssh/devsecops-prod.pem
+          chmod 600 ~/.ssh/devsecops-prod.pem
+
+      - name: Transferir imagen y desplegar contenedor en EC2 Produccion
+        run: |
+          scp -o StrictHostKeyChecking=no -i ~/.ssh/devsecops-prod.pem app-prod.tar.gz ubuntu@${{ secrets.EC2_PROD_HOST }}:/tmp/
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/devsecops-prod.pem ubuntu@${{ secrets.EC2_PROD_HOST }} << 'ENDSSH'
+            docker load < /tmp/app-prod.tar.gz
+            rm -f /tmp/app-prod.tar.gz
+            docker stop app-produccion || true
+            docker rm app-produccion || true
+            docker run -d --name app-produccion --restart always -p 3000:3000 \
+              -e API_SECRET_KEY="${{ secrets.API_SECRET_KEY }}" \
+              devsecops-prod:latest
+            docker image prune -f
+            docker ps
+          ENDSSH
