@@ -85,16 +85,18 @@ jobs:
           chmod 600 ~/.ssh/devsecops-prod.pem
 
       - name: Transferir imagen y desplegar contenedor en EC2 Produccion
+        env:
+          PROD_SECRET: ${{ secrets.API_SECRET_KEY }}
         run: |
           scp -o StrictHostKeyChecking=no -i ~/.ssh/devsecops-prod.pem app-prod.tar.gz ubuntu@${{ secrets.EC2_PROD_HOST }}:/tmp/
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/devsecops-prod.pem ubuntu@${{ secrets.EC2_PROD_HOST }} << 'ENDSSH'
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/devsecops-prod.pem ubuntu@${{ secrets.EC2_PROD_HOST }} "
             docker load < /tmp/app-prod.tar.gz
             rm -f /tmp/app-prod.tar.gz
             docker stop app-produccion || true
             docker rm app-produccion || true
             docker run -d --name app-produccion --restart always -p 3000:3000 \
-              -e API_SECRET_KEY="${{ secrets.API_SECRET_KEY }}" \
+              -e API_SECRET_KEY='$PROD_SECRET' \
               devsecops-prod:latest
             docker image prune -f
             docker ps
-          ENDSSH
+          "
